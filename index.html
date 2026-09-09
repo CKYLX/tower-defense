@@ -111,7 +111,7 @@ const TYPES = {
   mage:    { name:'法师', ico:'🔮', hp:70,  atk:30, cd:1500, range:200, cost:70,  slow:1.6, desc:'远程+减速，可跨兵线' },
   warrior: { name:'战士', ico:'⚔️', hp:260, atk:42, cd:1000, range:55,  cost:80,  slow:0, desc:'近战肉盾，只打本兵线' },
 };
-const SOLDIER_CD = { def: 3.5, atk: 2.5 };
+const SOLDIER_CD = { def: 3, atk: 3 };
 
 const EQUIP = {
   archer:  ['重弩','神臂弓','诸葛连弩','霸王弓','龙舌弓'],
@@ -246,8 +246,8 @@ function endDrag(e){
 function clientToCanvas(cx, cy){
   if(!cv) return null;
   const r=cv.getBoundingClientRect();
-  const k=(cv.width/(window.devicePixelRatio||1))/r.width;
-  const lx=(cx-r.left)*k, ly=(cy-r.top)*k;
+  const lx=(cx-r.left)*(W/r.width);
+  const ly=(cy-r.top)*(H/r.height);
   if(lx<0||lx>W||ly<0||ly>H) return null;
   return { lx, ly };
 }
@@ -265,7 +265,7 @@ function placeDef(type, lx, ly){
     const d=Math.hypot(c.x-lx, c.y-ly);
     if(d<bd){ bd=d; best=c; }
   });
-  if(!best || bd>55){ toast('拖到空格子上'); return; }
+  if(!best || bd>80){ toast('拖到空格子上'); return; }
   const cfg=TYPES[type];
   if(type==='soldier'){ soldierCd.def=SOLDIER_CD.def; }
   else { game.gold.def-=cfg.cost; }
@@ -326,7 +326,7 @@ function placeSplit(lx, ly){
 function aiStep(role,dt){
   const g=game;
   if(role==='atk'){
-    g.ai.atk.t+=dt; if(g.ai.atk.t<g.ai.atk.next) return;
+    g.ai.atk.t+=dt*1000; if(g.ai.atk.t<g.ai.atk.next) return;
     g.ai.atk.next = rnd(2200,3400);
     const gold=g.gold.atk;
     let type='soldier';
@@ -337,7 +337,7 @@ function aiStep(role,dt){
     if(type==='soldier'){ if(soldierCd.atk<=0){ soldierCd.atk=SOLDIER_CD.atk; game.units.push(makeUnit('atk','soldier',ri(0,laneCount-1),BASE_Y+20)); } }
     else if(gold>=c.cost){ g.gold.atk-=c.cost; game.units.push(makeUnit('atk',type,ri(0,laneCount-1),BASE_Y+20)); }
   } else {
-    g.ai.def.t+=dt; if(g.ai.def.t<g.ai.def.next) return;
+    g.ai.def.t+=dt*1000; if(g.ai.def.t<g.ai.def.next) return;
     g.ai.def.next = rnd(1600,2600);
     const gold=g.gold.def;
     const empty=g.cells.filter(c=>!c.unit);
@@ -376,7 +376,7 @@ function update(dt){
   soldierCd.atk=Math.max(0,soldierCd.atk-dt);
   creepTimer-=dt*1000;
   if(creepTimer<=0){ creepTimer=rnd(6000,9000); spawnCreep(); }
-  aiStep('atk',dt); aiStep('def',dt);
+  if(myRole==='def') aiStep('atk',dt); else aiStep('def',dt);
 
   // 更新单位
   for(const u of g.units){
@@ -386,9 +386,9 @@ function update(dt){
     if(u.team==='atk'){
       const tgt=findTarget(u);
       if(tgt){
-        if(tgt.dist>u.range){ u.y+=(slowed?22:44)*dt; }
+        if(tgt.dist>u.range){ u.y+=(slowed?30:60)*dt; }
         else if(u.atkCd<=0){ attack(u,tgt.obj); }
-      } else { u.y+=(slowed?22:44)*dt; }
+      } else { u.y+=(slowed?30:60)*dt; }
     } else if(u.team==='def'){
       const tgt=findTarget(u);
       if(tgt && u.atkCd<=0 && tgt.dist<=u.range){ attack(u,tgt.obj); }
@@ -524,6 +524,25 @@ function drawUnits(){
 function drawGhost(){
   if(!drag) return;
   const pos=clientToCanvas(drag.sx,drag.sy); if(!pos) return;
+  ctx.lineWidth=2.5;
+  if(drag.type==='split'){
+    if(myRole==='atk'){ ctx.strokeStyle='#fff'; ctx.strokeRect(4,4,W-8,H-8); }
+    else {
+      let lane=0,bd=1e9;
+      for(let i=0;i<laneCount;i++){ const d=Math.abs(laneCenterX(i)-pos.lx); if(d<bd){bd=d;lane=i;} }
+      const x=laneCenterX(lane), hw=W/laneCount/2;
+      ctx.strokeStyle='#fff'; ctx.strokeRect(x-hw,0,W/laneCount,H);
+    }
+  } else if(myRole==='def'){
+    let best=null,bd=1e9;
+    game.cells.forEach(c=>{ if(c.unit) return; const d=Math.hypot(c.x-pos.lx,c.y-pos.ly); if(d<bd){bd=d;best=c;} });
+    if(best && bd<80){ ctx.strokeStyle='#fff'; ctx.beginPath(); ctx.arc(best.x,sY(best.y),24,0,Math.PI*2); ctx.stroke(); }
+  } else {
+    let lane=0,bd=1e9;
+    for(let i=0;i<laneCount;i++){ const d=Math.abs(laneCenterX(i)-pos.lx); if(d<bd){bd=d;lane=i;} }
+    const x=laneCenterX(lane);
+    ctx.strokeStyle='#fff'; ctx.strokeRect(x-W/laneCount/2, sY(BASE_Y)-16, W/laneCount, 32);
+  }
   const cfg = drag.type==='split' ? {ico: myRole==='def'?'🔲':'➕'} : TYPES[drag.type];
   ctx.globalAlpha=0.6;
   ctx.fillStyle='#58a6ff'; ctx.beginPath(); ctx.arc(pos.lx,pos.ly,UNIT_R,0,Math.PI*2); ctx.fill();
