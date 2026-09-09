@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>塔防对决</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#0d1117; font-family:-apple-system,"PingFang SC","Microsoft YaHei",sans-serif; color:#e6edf3; touch-action:manipulation; }
+  #app { position:fixed; inset:0; display:flex; flex-direction:column; }
+  #cvWrap { position:relative; flex:1; display:flex; align-items:center; justify-content:center; overflow:hidden; }
+  canvas { display:block; background:#111; border-radius:4px; }
+  .hidden { display:none !important; }
+  /* 菜单 */
+  #menu { position:fixed; inset:0; background:linear-gradient(160deg,#0d1117,#1a2332); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:30; }
+  #menu h1 { font-size:28px; letter-spacing:2px; margin-bottom:6px; color:#f0c060; }
+  #menu .sub { color:#8b949e; font-size:13px; margin-bottom:30px; }
+  .big-btn { width:220px; padding:14px; margin:8px; font-size:17px; border-radius:12px; border:1px solid #30363d; background:#21262d; color:#e6edf3; cursor:pointer; text-align:center; }
+  .big-btn:active { background:#30363d; }
+  .big-btn.primary { background:#238636; border-color:#2ea043; color:#fff; }
+  /* HUD */
+  #hud { flex:0 0 auto; display:flex; flex-direction:column; background:#161b22; border-top:1px solid #30363d; padding:8px 10px; z-index:10; }
+  .hud-row { display:flex; align-items:center; justify-content:space-between; font-size:13px; margin-bottom:6px; }
+  .bar { flex:1; height:10px; background:#21262d; border-radius:5px; overflow:hidden; margin:0 8px; }
+  .bar > i { display:block; height:100%; background:#3fb950; transition:width .15s; }
+  .bar.king > i { background:#f85149; }
+  .gold { color:#f0c060; font-weight:bold; }
+  /* 招募栏 */
+  #recruit { flex:0 0 auto; display:flex; gap:6px; padding:8px 10px; background:#161b22; border-top:1px solid #30363d; overflow-x:auto; z-index:10; }
+  .card { flex:0 0 62px; height:74px; border-radius:10px; border:1px solid #30363d; background:#21262d; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:pointer; position:relative; }
+  .card.sel { border-color:#f0c060; box-shadow:0 0 8px rgba(240,192,96,.5); }
+  .card .ico { font-size:26px; line-height:1; }
+  .card .nm { font-size:11px; margin-top:2px; }
+  .card .cost { font-size:10px; color:#f0c060; }
+  .card .cd { position:absolute; inset:0; background:rgba(0,0,0,.55); border-radius:10px; display:flex; align-items:center; justify-content:center; font-size:15px; font-weight:bold; color:#fff; }
+  .card.off { opacity:.4; }
+  /* 结果弹窗 */
+  #result { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:40; }
+  #result .box { background:#161b22; border:1px solid #30363d; border-radius:14px; padding:24px 28px; text-align:center; min-width:260px; }
+  #result h2 { font-size:24px; margin-bottom:8px; }
+  #result .msg { font-size:14px; color:#8b949e; margin-bottom:18px; line-height:1.6; }
+  .tip { position:fixed; top:16%; left:50%; transform:translateX(-50%); background:#30363d; color:#fff; padding:8px 16px; border-radius:20px; font-size:13px; z-index:50; pointer-events:none; transition:opacity .3s; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="cvWrap"><canvas id="cv"></canvas></div>
+  <div id="hud" class="hidden">
+    <div class="hud-row">
+      <span id="roleTag" style="color:#58a6ff;font-weight:bold;"></span>
+      <span id="timer" style="color:#8b949e;"></span>
+    </div>
+    <div class="hud-row">
+      <span>👑</span>
+      <div class="bar king"><i id="kingBar" style="width:100%"></i></div>
+      <span id="kingTxt" style="font-size:11px;color:#f85149;"></span>
+      <span class="gold">💰 <span id="goldTxt">0</span></span>
+    </div>
+    <div class="hud-row">
+      <span id="myHp" style="font-size:11px;color:#8b949e;"></span>
+    </div>
+  </div>
+  <div id="recruit" class="hidden"></div>
+</div>
+
+<div id="menu">
+  <h1>塔防对决</h1>
+  <div class="sub">1v1 实时塔防 · 无真人自动匹配 AI</div>
+  <div class="big-btn primary" onclick="startGame('def')">🛡️ 选择防守方</div>
+  <div class="big-btn" onclick="startGame('atk')">⚔️ 选择进攻方</div>
+  <div class="sub" style="margin-top:20px;margin-bottom:0;font-size:11px;line-height:1.7;text-align:center;max-width:300px;">
+    守方：在格子上放牌防守国王，撑过 5 分钟获胜<br>
+    攻方：出兵推进，击杀国王获胜
+  </div>
+</div>
+
+<div id="result" class="hidden">
+  <div class="box">
+    <h2 id="resTitle"></h2>
+    <div class="msg" id="resMsg"></div>
+    <div class="big-btn primary" onclick="location.reload()">再来一局</div>
+    <div class="big-btn" onclick="location.reload()">返回菜单</div>
+  </div>
+</div>
+
+<div id="tip" class="tip hidden"></div>
+
+<script>
+'use strict';
+/* ================= 常量与数值表 ================= */
+const W = 960, H = 540;
+const LANES = 3;
+const LANE_Y = [100, 270, 440];
+const KING_X = 890;
+const KING_Y = 270;
+const KING_HP = 3000;
+const GAME_TIME = 300;        // 5 分钟
+const BASE_GOLD = 120;
+const GOLD_TICK = 3;          // 每 2 秒自动加
+const GOLD_TICK_MS = 2000;
+const KILL_SOLDIER = 10;
+const KILL_HERO = 35;
+const KILL_CREEP = 5;
+const UNIT_R = 13;
+
+// 兵种数值表
+const TYPES = {
+  soldier: { name:'小兵', ico:'🗡️', hp:30,  atk:8,  cd:700,  range:110, speed:44, cost:0,   kind:'soldier', slow:0 },
+  archer:  { name:'射手', ico:'🏹', hp:80,  atk:45, cd:1800, range:260, speed:30, cost:60,  kind:'hero', slow:0 },
+  mage:    { name:'法师', ico:'🔮', hp:70,  atk:30, cd:1500, range:200, speed:30, cost:70,  kind:'hero', slow:1.6 },
+  warrior: { name:'战士', ico:'⚔️', hp:260, atk:42, cd:1000, range:55,  speed:34, cost:80,  kind:'hero', slow:0 },
+};
+
+// 小兵 CD（秒）
+const SOLDIER_CD = { def: 4.0, atk: 2.5 };
+
+// 格子
+const CELLS_PER_LANE = 3;
+const CELL_X0 = 560, CELL_DX = 80;   // 3 个格子 x：560/640/720
+const SPLIT_COST = [200, 400];       // 分裂第 4、5 格费用
+
+// 装备池（用于胜负掉落展示，完整系统后续接入）
+const EQUIP = {
+  archer:  ['重弩','神臂弓','诸葛连弩','霸王弓','龙舌弓'],
+  mage:    ['桃木杖','羽扇','八卦炉','玲珑塔','东皇钟'],
+  warrior: ['青铜剑','青龙偃月刀','方天画戟','丈八蛇矛','干将莫邪'],
+};
+
+/* ================= 状态 ================= */
+let game = null;   // 游戏状态对象
+let cv, ctx, raf = null;
+let selected = null;   // 当前选中的招募兵种
+let myRole = null;     // 'def' | 'atk'
+let lastTs = 0;
+let creepTimer = 0;
+let aiTimer = 0;
+let soldierCd = { def:0, atk:0 };
+let cellDirty = true;
+
+/* ================= 工具 ================= */
+function $(id){ return document.getElementById(id); }
+function rnd(a,b){ return a + Math.random()*(b-a); }
+function ri(a,b){ return Math.floor(rnd(a,b+1)); }
+function dist(ax,ay,bx,by){ return Math.hypot(ax-bx, ay-by); }
+function toast(msg){
+  const t = $('tip'); t.textContent = msg; t.classList.remove('hidden');
+  clearTimeout(t._t); t._t = setTimeout(()=>t.classList.add('hidden'), 1600);
+}
+
+/* ================= 单位 ================= */
+function makeUnit(team, type, lane, x){
+  const cfg = TYPES[type];
+  return {
+    id: (game.uid++),
+    team, type, lane,
+    x, y: LANE_Y[lane],
+    hp: cfg.hp, maxHp: cfg.hp,
+    atk: cfg.atk, cd: cfg.cd,
+    range: cfg.range, speed: cfg.speed,
+    slow: cfg.slow,
+    atkCd: 0,        // 攻击冷却剩余
+    slowUntil: 0,    // 减速截止时间戳
+  };
+}
+
+/* ================= 游戏初始化 ================= */
+function startGame(role){
+  myRole = role;
+  game = {
+    uid: 1,
+    time: 0,
+    over: false,
+    units: [],
+    cells: [],       // 守方格子
+    creeps: [],
+    king: { hp: KING_HP, maxHp: KING_HP },
+    gold: { def: BASE_GOLD, atk: BASE_GOLD },
+    ai: { def: { t:0, next:0 }, atk: { t:0, next:0 } },
+  };
+  // 初始化格子：3 路线 × 3 格
+  for(let l=0; l<LANES; l++){
+    for(let i=0; i<CELLS_PER_LANE; i++){
+      game.cells.push({ lane:l, idx:i, x: CELL_X0 + i*CELL_DX, y: LANE_Y[l], unit:null, splitMax:CELLS_PER_LANE });
+    }
+  }
+  selected = null;
+  soldierCd = { def:0, atk:0 };
+  creepTimer = 3000;
+  $('menu').classList.add('hidden');
+  $('hud').classList.remove('hidden');
+  $('recruit').classList.remove('hidden');
+  $('roleTag').textContent = role==='def' ? '🛡️ 防守方（撑过5分钟）' : '⚔️ 进攻方（击杀国王）';
+  buildRecruit();
+  initCanvas();
+  lastTs = performance.now();
+  if(raf) cancelAnimationFrame(raf);
+  raf = requestAnimationFrame(loop);
+}
+
+function initCanvas(){
+  cv = $('cv');
+  const dpr = Math.min(window.devicePixelRatio||1, 2);
+  cv.width = W*dpr; cv.height = H*dpr;
+  ctx = cv.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  // CSS 自适应
+  function fit(){
+    const wrap = $('cvWrap');
+    const w = wrap.clientWidth, h = wrap.clientHeight;
+    const scale = Math.min(w/W, h/H);
+    cv.style.width = (W*scale)+'px';
+    cv.style.height = (H*scale)+'px';
+  }
+  fit();
+  window.addEventListener('resize', fit);
+}
+
+/* ================= 招募栏 ================= */
+function buildRecruit(){
+  const box = $('recruit'); box.innerHTML = '';
+  const types = ['soldier','archer','mage','warrior'];
+  types.forEach(t=>{
+    const cfg = TYPES[t];
+    const d = document.createElement('div');
+    d.className = 'card'; d.id = 'card_'+t;
+    d.innerHTML = '<div class="ico">'+cfg.ico+'</div><div class="nm">'+cfg.name+'</div>'+
+      '<div class="cost">'+(cfg.cost>0?'💰'+cfg.cost:'免费')+'</div>';
+    d.onclick = ()=>{ selectType(t); };
+    box.appendChild(d);
+  });
+  // 分裂按钮
+  const sp = document.createElement('div');
+  sp.className = 'card'; sp.id = 'card_split';
+  const sc = myRole==='def' ? SPLIT_COST[0] : 0;
+  sp.innerHTML = '<div class="ico">🔲</div><div class="nm">分裂格子</div><div class="cost">💰'+sc+'</div>';
+  sp.onclick = ()=>{ doSplit(); };
+  box.appendChild(sp);
+}
+
+function selectType(t){
+  selected = (selected===t) ? null : t;
+  ['soldier','archer','mage','warrior'].forEach(x=>{
+    const c = $('card_'+x);
+    if(c) c.classList.toggle('sel', selected===x);
+  });
+}
+
+/* ================= 招募 / 放置 / 出兵 ================= */
+function tryRecruit(type){
+  const cfg = TYPES[type];
+  const g = game.gold[myRole];
+  if(type==='soldier'){
+    if(soldierCd[myRole] > 0){ toast('小兵刷新中'); return; }
+    return true;
+  }
+  if(g < cfg.cost){ toast('金币不足'); return; }
+  return true;
+}
+
+function doRecruitOn(lane, x){
+  const cfg = TYPES[selected];
+  if(!cfg) { toast('先选择一个兵种'); return; }
+  if(selected==='soldier'){
+    if(soldierCd[myRole] > 0){ toast('小兵刷新中'); return; }
+    soldierCd[myRole] = SOLDIER_CD[myRole];
+  } else {
+    if(game.gold[myRole] < cfg.cost){ toast('金币不足'); return; }
+    game.gold[myRole] -= cfg.cost;
+  }
+  const u = makeUnit(myRole, selected, lane, x);
+  game.units.push(u);
+  selected = null;
+  ['soldier','archer','mage','warrior'].forEach(x=>{
+    const c = $('card_'+x); if(c) c.classList.remove('sel');
+  });
+  return u;
+}
+
+/* 守方：点空格子放牌 */
+function onCellTap(cell){
+  if(myRole!=='def') return;
+  if(!selected){ toast('先选择一个兵种'); return; }
+  if(cell.unit){ toast('该格子已有牌'); return; }
+  const cfg = TYPES[selected];
+  if(selected==='soldier'){
+    if(soldierCd.def>0){ toast('小兵刷新中'); return; }
+    soldierCd.def = SOLDIER_CD.def;
+  } else {
+    if(game.gold.def < cfg.cost){ toast('金币不足'); return; }
+    game.gold.def -= cfg.cost;
+  }
+  const u = makeUnit('def', selected, cell.lane, cell.x);
+  u.homeCell = cell;
+  cell.unit = u;
+  game.units.push(u);
+  selected = null;
+  ['soldier','archer','mage','warrior'].forEach(x=>{
+    const c = $('card_'+x); if(c) c.classList.remove('sel');
+  });
+}
+
+/* 攻方：点路线出兵 */
+function onLaneTap(lane){
+  if(myRole!=='atk') return;
+  if(!selected){ toast('先选择一个兵种'); return; }
+  const cfg = TYPES[selected];
+  if(selected==='soldier'){
+    if(soldierCd.atk>0){ toast('小兵刷新中'); return; }
+    soldierCd.atk = SOLDIER_CD.atk;
+  } else {
+    if(game.gold.atk < cfg.cost){ toast('金币不足'); return; }
+    game.gold.atk -= cfg.cost;
+  }
+  const u = makeUnit('atk', selected, lane, 30);
+  game.units.push(u);
+  selected = null;
+  ['soldier','archer','mage','warrior'].forEach(x=>{
+    const c = $('card_'+x); if(c) c.classList.remove('sel');
+  });
+}
+
+/* 分裂格子 */
+function doSplit(){
+  if(myRole!=='def'){ toast('仅防守方可分裂格子'); return; }
+  // 找一条还能分裂的路线
+  const laneCount = [0,0,0];
+  game.cells.forEach(c=>laneCount[c.lane]++);
+  let lane = -1;
+  for(let l=0;l<LANES;l++){
+    if(laneCount[l] < CELLS_PER_LANE + SPLIT_COST.length){ lane=l; break; }
+  }
+  if(lane<0){ toast('所有路线已满'); return; }
+  const cur = laneCount[lane] - CELLS_PER_LANE; // 已分裂数量
+  if(cur >= SPLIT_COST.length){ toast('该路线已满'); return; }
+  const cost = SPLIT_COST[cur];
+  if(game.gold.def < cost){ toast('金币不足（需💰'+cost+'）'); return; }
+  game.gold.def -= cost;
+  const idx = laneCount[lane];
+  game.cells.push({ lane:lane, idx:idx, x: CELL_X0 + idx*CELL_DX, y: LANE_Y[lane], unit:null });
+  toast('路线'+(lane+1)+'新增格子！');
+}
+
+/* ================= Canvas 交互 ================= */
+function onCanvasTap(ex, ey){
+  if(!game || game.over) return;
+  const rect = cv.getBoundingClientRect();
+  const scale = cv.width / (window.devicePixelRatio||1) / rect.width; // 逻辑/像素
+  const lx = (ex - rect.left) * (cv.width/(window.devicePixelRatio||1)) / rect.width;
+  const ly = (ey - rect.top) * (cv.height/(window.devicePixelRatio||1)) / rect.height;
+  if(myRole==='def'){
+    // 找最近的空格子
+    let best=null, bd=1e9;
+    game.cells.forEach(c=>{
+      const d = Math.hypot(c.x-lx, c.y-ly);
+      if(d<bd){ bd=d; best=c; }
+    });
+    if(best && bd < 40) onCellTap(best);
+    else if(!selected) toast('点击空格子放置，或先选兵种');
+  } else {
+    // 找最近的路线
+    let lane=0, bd=1e9;
+    LANE_Y.forEach((y,l)=>{ const d=Math.abs(y-ly); if(d<bd){bd=d; lane=l;} });
+    onLaneTap(lane);
+  }
+}
+cv && cv.addEventListener('click', e=>onCanvasTap(e.clientX, e.clientY));
+
+/* ================= AI ================= */
+function aiStep(role, dt){
+  const g = game;
+  if(role==='atk'){
+    // AI 进攻：定时出兵
+    g.ai.atk.t += dt;
+    if(g.ai.atk.t < g.ai.atk.next) return;
+    g.ai.atk.next = 2200 + Math.random()*1200;
+    const gold = g.gold.atk;
+    // 优先出英雄，金币不足出小兵
+    let type = 'soldier';
+    if(gold >= 80 && Math.random()<0.5) type = 'warrior';
+    else if(gold >= 60 && Math.random()<0.5) type = 'archer';
+    else if(gold >= 70 && Math.random()<0.35) type = 'mage';
+    const cfg = TYPES[type];
+    if(type==='soldier'){
+      if(soldierCd.atk<=0){
+        soldierCd.atk = SOLDIER_CD.atk;
+        const lane = ri(0,2);
+        g.units.push(makeUnit('atk', type, lane, 30));
+      }
+    } else if(gold>=cfg.cost){
+      g.gold.atk -= cfg.cost;
+      const lane = ri(0,2);
+      g.units.push(makeUnit('atk', type, lane, 30));
+    }
+  } else {
+    // AI 防守：定时放牌
+    g.ai.def.t += dt;
+    if(g.ai.def.t < g.ai.def.next) return;
+    g.ai.def.next = 1800 + Math.random()*800;
+    const gold = g.gold.def;
+    const empty = g.cells.filter(c=>!c.unit);
+    if(!empty.length) return;
+    let type='soldier';
+    if(gold>=80 && Math.random()<0.4) type='warrior';
+    else if(gold>=60 && Math.random()<0.5) type='archer';
+    else if(gold>=70 && Math.random()<0.3) type='mage';
+    const cfg = TYPES[type];
+    const cell = empty[ri(0,empty.length-1)];
+    if(type==='soldier'){
+      if(soldierCd.def<=0){
+        soldierCd.def = SOLDIER_CD.def;
+        const u = makeUnit('def', type, cell.lane, cell.x);
+        u.homeCell=cell; cell.unit=u; g.units.push(u);
+      }
+    } else if(gold>=cfg.cost){
+      g.gold.def -= cfg.cost;
+      const u = makeUnit('def', type, cell.lane, cell.x);
+      u.homeCell=cell; cell.unit=u; g.units.push(u);
+    }
+  }
+}
+
+/* ================= 野怪 ================= */
+function spawnCreep(){
+  const lane = ri(0,2);
+  game.creeps.push({ lane, x: rnd(200, KING_X-300), y: LANE_Y[lane], hp:100, maxHp:100, r:11 });
+}
+
+/* ================= 主循环 ================= */
+function loop(ts){
+  if(!game) return;
+  const dt = Math.min((ts-lastTs)/1000, 0.05);
+  lastTs = ts;
+  update(dt);
+  render();
+  if(!game.over) raf = requestAnimationFrame(loop);
+}
+
+function update(dt){
+  const g = game;
+  if(g.over) return;
+  g.time += dt;
+  // 金币自动增长
+  g._goldTick = (g._goldTick||0) + dt*1000;
+  if(g._goldTick >= GOLD_TICK_MS){
+    g._goldTick -= GOLD_TICK_MS;
+    g.gold.def += GOLD_TICK;
+    g.gold.atk += GOLD_TICK;
+  }
+  // CD 计时
+  soldierCd.def = Math.max(0, soldierCd.def - dt);
+  soldierCd.atk = Math.max(0, soldierCd.atk - dt);
+  // 野怪生成
+  creepTimer -= dt*1000;
+  if(creepTimer<=0){
+    creepTimer = rnd(6000, 9000);
+    spawnCreep();
+  }
+  // AI
+  aiStep('atk', dt);
+  aiStep('def', dt);
+  // 更新单位
+  for(const u of g.units){
+    if(u.hp<=0) continue;
+    u.atkCd = Math.max(0, u.atkCd - dt*1000);
+    // 减速
+    const slowed = u.slowUntil > performance.now();
+    const speed = slowed ? u.speed*0.5 : u.speed;
+    if(u.team==='atk'){
+      // 找目标
+      const tgt = findTarget(u);
+      if(tgt){
+        const d = tgt.dist;
+        if(d > u.range){
+          u.x += speed*dt;
+        } else if(u.atkCd<=0){
+          attack(u, tgt.obj);
+        }
+      } else {
+        // 无目标，推进
+        u.x += speed*dt;
+      }
+    } else {
+      // 防守方站桩，只攻击
+      const tgt = findTarget(u);
+      if(tgt && u.atkCd<=0 && tgt.dist <= u.range){
+        attack(u, tgt.obj);
+      }
+    }
+  }
+  // 清理死亡单位 & 结算金币
+  for(let i=g.units.length-1; i>=0; i--){
+    const u = g.units[i];
+    if(u.hp<=0){
+      if(u.homeCell) u.homeCell.unit = null;
+      if(u.team==='def') g.gold.atk += (u.type==='soldier'?KILL_SOLDIER:KILL_HERO);
+      else g.gold.def += (u.type==='soldier'?KILL_SOLDIER:KILL_HERO);
+      g.units.splice(i,1);
+    }
+  }
+  // 野怪：攻方单位靠近击杀
+  for(let i=g.creeps.length-1; i>=0; i--){
+    const c = g.creeps[i];
+    if(c.hp<=0){ g.creeps.splice(i,1); continue; }
+    // 攻方单位自动攻击野怪（进入射程）
+    for(const u of g.units){
+      if(u.team==='atk' && u.hp>0 && u.atkCd<=0){
+        if(Math.abs(u.y-c.y)<30 && Math.abs(u.x-c.x)<=u.range){
+          c.hp -= u.atk;
+          u.atkCd = u.cd;
+          if(c.hp<=0){
+            g.gold.atk += KILL_CREEP;
+            g.creeps.splice(i,1);
+          }
+          break;
+        }
+      }
+    }
+  }
+  // 国王被攻击（攻方单位到达国王处）
+  for(const u of g.units){
+    if(u.team==='atk' && u.hp>0){
+      if(u.x >= KING_X - 30){
+        if(u.atkCd<=0){
+          g.king.hp -= u.atk;
+          u.atkCd = u.cd;
+        }
+      }
+    }
+  }
+  // 胜负判定
+  if(g.king.hp <= 0){
+    g.king.hp = 0;
+    endGame(myRole==='atk');   // 攻方赢
+  } else if(g.time >= GAME_TIME){
+    endGame(myRole==='def');   // 守方赢
+  }
+}
+
+function findTarget(u){
+  let best=null, bd=1e9;
+  if(u.team==='atk'){
+    // 目标：守方单位（最近），其次国王
+    for(const o of game.units){
+      if(o.team==='def' && o.hp>0){
+        const d = Math.hypot(o.x-u.x, o.y-u.y);
+        if(d<bd){ bd=d; best={obj:o, dist:d}; }
+      }
+    }
+    if(best) return best;
+    // 无守方单位，攻国王
+    const dk = KING_X - u.x;
+    if(dk <= u.range + 30) return {obj:{__king:true}, dist:dk};
+    return null;
+  } else {
+    for(const o of game.units){
+      if(o.team==='atk' && o.hp>0){
+        const d = Math.hypot(o.x-u.x, o.y-u.y);
+        if(d<bd){ bd=d; best={obj:o, dist:d}; }
+      }
+    }
+    return best;
+  }
+}
+
+function attack(u, tgt){
+  if(tgt.__king){
+    game.king.hp -= u.atk;
+  } else {
+    tgt.hp -= u.atk;
+    if(u.slow>0){
+      tgt.slowUntil = performance.now() + u.slow*1000;
+    }
+  }
+  u.atkCd = u.cd;
+}
+
+/* ================= 胜负 ================= */
+function endGame(iWin){
+  if(game.over) return;
+  game.over = true;
+  const won = iWin;
+  let title = won ? '🏆 胜利！' : '💀 失败';
+  let msg = '';
+  if(won){
+    // 掉落装备
+    const pool = EQUIP[['archer','mage','warrior'][ri(0,2)]];
+    const eq = pool[ri(0,pool.length-1)];
+    msg = '你获得了一件装备：<b style="color:#f0c060">'+eq+'</b><br>（装备系统将在后续版本接入，敬请期待）';
+  } else {
+    msg = '别灰心，再来一局！';
+  }
+  $('resTitle').textContent = title;
+  $('resMsg').innerHTML = msg;
+  $('result').classList.remove('hidden');
+  if(raf) cancelAnimationFrame(raf);
+}
+
+/* ================= 渲染 ================= */
+function render(){
+  ctx.clearRect(0,0,W,H);
+  drawField();
+  drawCells();
+  drawKing();
+  drawCreeps();
+  drawUnits();
+  drawHUD();
+}
+
+function drawField(){
+  // 背景
+  ctx.fillStyle = '#14181f';
+  ctx.fillRect(0,0,W,H);
+  // 路线
+  for(let l=0;l<LANES;l++){
+    const y = LANE_Y[l];
+    ctx.strokeStyle = 'rgba(48,54,61,.5)';
+    ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(KING_X,y); ctx.stroke();
+    // 进攻方基地
+    ctx.fillStyle = '#1f2430';
+    ctx.fillRect(0, y-26, 40, 52);
+    ctx.fillStyle = '#8b949e';
+    ctx.font = '11px sans-serif';
+    ctx.fillText('出兵', 6, y+4);
+  }
+}
+
+function drawCells(){
+  for(const c of game.cells){
+    ctx.beginPath();
+    ctx.arc(c.x, c.y, 22, 0, Math.PI*2);
+    ctx.fillStyle = c.unit ? 'rgba(240,192,96,.18)' : 'rgba(56,139,253,.12)';
+    ctx.fill();
+    ctx.strokeStyle = c.unit ? '#f0c060' : '#388bfd';
+    ctx.lineWidth = c.unit?1.5:1;
+    ctx.stroke();
+    if(!c.unit){
+      ctx.fillStyle = 'rgba(56,139,253,.5)';
+      ctx.beginPath(); ctx.arc(c.x,c.y,3,0,Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+function drawKing(){
+  const g = game;
+  // 国王
+  ctx.fillStyle = '#f85149';
+  ctx.beginPath(); ctx.arc(KING_X, KING_Y, 26, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+  ctx.fillStyle = '#fff';
+  ctx.font = '20px sans-serif';
+  ctx.textAlign='center';
+  ctx.fillText('👑', KING_X, KING_Y+7);
+  ctx.textAlign='left';
+}
+
+function drawCreeps(){
+  for(const c of game.creeps){
+    ctx.fillStyle = '#58a6ff';
+    ctx.beginPath(); ctx.arc(c.x, c.y, c.r, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#0d1117';
+    ctx.font = '9px sans-serif';
+    ctx.textAlign='center';
+    ctx.fillText('野怪', c.x, c.y+3);
+    ctx.textAlign='left';
+  }
+}
+
+function drawUnits(){
+  for(const u of game.units){
+    if(u.hp<=0) continue;
+    const cfg = TYPES[u.type];
+    const col = u.team==='def' ? '#3fb950' : '#f0c060';
+    // 血条
+    const w = 26, h = 4;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(u.x-w/2, u.y-UNIT_R-8, w, h);
+    ctx.fillStyle = u.team==='def' ? '#3fb950' : '#f85149';
+    ctx.fillRect(u.x-w/2, u.y-UNIT_R-8, w*(u.hp/u.maxHp), h);
+    // 身体
+    ctx.fillStyle = col;
+    ctx.beginPath(); ctx.arc(u.x, u.y, UNIT_R, 0, Math.PI*2); ctx.fill();
+    ctx.strokeStyle = '#0d1117'; ctx.lineWidth=2; ctx.stroke();
+    // 减速标记
+    if(u.slowUntil > performance.now()){
+      ctx.fillStyle = 'rgba(56,139,253,.7)';
+      ctx.beginPath(); ctx.arc(u.x, u.y, UNIT_R+3, 0, Math.PI*2); ctx.stroke();
+    }
+    // 图标
+    ctx.fillStyle = '#fff';
+    ctx.font = '11px sans-serif';
+    ctx.textAlign='center';
+    ctx.fillText(cfg.ico, u.x, u.y+4);
+    ctx.textAlign='left';
+  }
+}
+
+function drawHUD(){
+  const g = game;
+  $('goldTxt').textContent = g.gold[myRole];
+  const kp = Math.max(0, g.king.hp/g.king.maxHp*100);
+  $('kingBar').style.width = kp+'%';
+  $('kingTxt').textContent = Math.ceil(g.king.hp)+'/'+g.king.maxHp;
+  const remain = Math.max(0, GAME_TIME - g.time);
+  const m = Math.floor(remain/60), s = Math.floor(remain%60);
+  $('timer').textContent = '⏱ '+m+':'+String(s).padStart(2,'0');
+  $('myHp').textContent = '敌方国王剩余 '+Math.ceil(g.king.hp)+' 血 · 目标：'+(myRole==='def'?'撑过5分钟':'击杀国王');
+  // 小兵 CD 显示
+  const sd = $('card_soldier');
+  if(sd){
+    const cdv = soldierCd[myRole];
+    let cdEl = sd.querySelector('.cd');
+    if(cdv>0){
+      if(!cdEl){ cdEl = document.createElement('div'); cdEl.className='cd'; sd.appendChild(cdEl); }
+      cdEl.textContent = cdv.toFixed(1);
+    } else if(cdEl){ cdEl.remove(); }
+  }
+  // 招募卡金币高亮
+  ['soldier','archer','mage','warrior'].forEach(t=>{
+    const c = $('card_'+t); if(!c) return;
+    const cfg = TYPES[t];
+    if(t!=='soldier' && g.gold[myRole] < cfg.cost) c.classList.add('off');
+    else c.classList.remove('off');
+  });
+}
+</script>
+</body>
+</html>
