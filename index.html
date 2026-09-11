@@ -134,7 +134,7 @@ const TYPES = {
   mage:    { name:'法师', ico:'🔮', hp:70,  atk:30, cd:1500, range:200, cost:70,  slow:1.6, desc:'远程+减速，可跨兵线' },
   warrior: { name:'战士', ico:'⚔️', hp:260, atk:42, cd:1000, range:55,  cost:80,  slow:0,   desc:'近战肉盾，只打本兵线' },
 };
-const SOLDIER_CD = { def: 3, atk: 3 };
+const SOLDIER_CD = { def: 3, atk: 2 }; // 进攻方小兵刷新比防守方快1.5倍
 
 const EQUIP = {
   archer:  ['重弩','神臂弓','诸葛连弩','霸王弓','龙舌弓'],
@@ -595,30 +595,53 @@ function placeSplit(lx, ly){
 function aiStep(role,dt){
   const g=game;
   if(role==='atk'){
-    g.ai.atk.t+=dt*1000; if(g.ai.atk.t<g.ai.atk.next) return;
-    g.ai.atk.next = rnd(2200,3400);
-    const gold=g.gold.atk;
-    let type='soldier';
-    if(gold>=80 && Math.random()<0.5) type='warrior';
-    else if(gold>=60 && Math.random()<0.5) type='archer';
-    else if(gold>=70 && Math.random()<0.35) type='mage';
-    const c=TYPES[type];
-    if(type==='soldier'){ if(soldierCd.atk<=0){ soldierCd.atk=SOLDIER_CD.atk; game.units.push(makeUnit('atk','soldier',ri(0,laneCount-1),BASE_Y+20)); } }
-    else if(gold>=c.cost){ g.gold.atk-=c.cost; game.units.push(makeUnit('atk',type,ri(0,laneCount-1),BASE_Y+20)); }
+    // 小兵：与真人完全一致，受 soldierCd.atk 限制，冷却好就放
+    if(soldierCd.atk<=0){
+      soldierCd.atk=SOLDIER_CD.atk;
+      game.units.push(makeUnit('atk','soldier',ri(0,laneCount-1),BASE_Y+20));
+    }
+    // 高级兵：独立决策节奏，金币够才放
+    g.ai.atk.t+=dt*1000;
+    if(g.ai.atk.t>=g.ai.atk.next){
+      g.ai.atk.next=g.ai.atk.t+rnd(2200,3400);
+      const opts=[];
+      if(g.gold.atk>=80) opts.push('warrior');
+      if(g.gold.atk>=60) opts.push('archer');
+      if(g.gold.atk>=70) opts.push('mage');
+      if(opts.length){
+        const type=opts[ri(0,opts.length-1)];
+        g.gold.atk-=TYPES[type].cost;
+        game.units.push(makeUnit('atk',type,ri(0,laneCount-1),BASE_Y+20));
+      }
+    }
   } else {
-    g.ai.def.t+=dt*1000; if(g.ai.def.t<g.ai.def.next) return;
-    g.ai.def.next = rnd(1600,2600);
-    const gold=g.gold.def;
-    const empty=g.cells.filter(c=>!c.unit);
-    if(!empty.length) return;
-    let type='soldier';
-    if(gold>=80 && Math.random()<0.4) type='warrior';
-    else if(gold>=60 && Math.random()<0.5) type='archer';
-    else if(gold>=70 && Math.random()<0.3) type='mage';
-    const c=TYPES[type];
-    const cell=empty[ri(0,empty.length-1)];
-    if(type==='soldier'){ if(soldierCd.def<=0){ soldierCd.def=SOLDIER_CD.def; const u=makeUnit('def','soldier',cell.lane,cell.y); u.homeCell=cell; cell.unit=u; game.units.push(u); } }
-    else if(gold>=c.cost){ g.gold.def-=c.cost; const u=makeUnit('def',type,cell.lane,cell.y); u.homeCell=cell; cell.unit=u; game.units.push(u); }
+    // 防守方小兵：与真人完全一致，受 soldierCd.def 限制
+    if(soldierCd.def<=0){
+      const empty=g.cells.filter(c=>!c.unit);
+      if(empty.length){
+        const cell=empty[ri(0,empty.length-1)];
+        soldierCd.def=SOLDIER_CD.def;
+        const u=makeUnit('def','soldier',cell.lane,cell.y); u.homeCell=cell; cell.unit=u; game.units.push(u);
+      }
+    }
+    // 防守方高级兵
+    g.ai.def.t+=dt*1000;
+    if(g.ai.def.t>=g.ai.def.next){
+      g.ai.def.next=g.ai.def.t+rnd(1600,2600);
+      const empty=g.cells.filter(c=>!c.unit);
+      if(empty.length){
+        const opts=[];
+        if(g.gold.def>=80) opts.push('warrior');
+        if(g.gold.def>=60) opts.push('archer');
+        if(g.gold.def>=70) opts.push('mage');
+        if(opts.length){
+          const type=opts[ri(0,opts.length-1)];
+          g.gold.def-=TYPES[type].cost;
+          const cell=empty[ri(0,empty.length-1)];
+          const u=makeUnit('def',type,cell.lane,cell.y); u.homeCell=cell; cell.unit=u; game.units.push(u);
+        }
+      }
+    }
   }
 }
 
