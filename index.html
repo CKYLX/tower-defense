@@ -61,7 +61,7 @@
       <span id="timer" style="color:#8b949e;"></span>
     </div>
     <div class="hud-row">
-      <span style="font-size:11px;">👑敌方国王</span>
+      <span style="font-size:11px;">👑国王 <span id="kingHpTxt" style="color:#f85149;">100</span></span>
       <div class="bar"><i id="kingBar" style="width:100%"></i></div>
       <span class="gold">💰<span id="goldTxt">0</span></span>
     </div>
@@ -120,7 +120,11 @@
 /* ================= 常量（竖屏世界坐标） ================= */
 const W = 540, H = 960;
 const KING_Y = 940, BASE_Y = 0;
-const KING_HP = 3500, GAME_TIME = 300;
+const KING_HP = 100, GAME_TIME = 300;
+const KING_HEAL_CD = 10, KING_HEAL_AMOUNT = 5;
+const KING_BUY_COST = 500, KING_BUY_HP = 20;
+const ASSASSIN_COST = 500, ASSASSIN_DMG = 20;
+const KING_HIT = { soldier:10, archer:15, mage:15, warrior:20 };
 const KILL_SOLDIER = 10, KILL_HERO = 35, KILL_CREEP = 5;
 const UNIT_R = 17;
 
@@ -433,7 +437,7 @@ function startGame(role){
   game = {
     uid:1, time:0, over:false,
     units:[], cells:[],
-    king:{ hp:KING_HP, maxHp:KING_HP },
+    king:{ hp:KING_HP, maxHp:KING_HP, healT:0 },
     gold:{ def:0, atk:0 },
     ai:{ def:{t:0,next:1200}, atk:{t:0,next:800} },
   };
@@ -490,6 +494,33 @@ function buildRecruit(){
   sp.innerHTML='<div class="ico">'+(myRole==='def'?'🔲':'➕')+'</div><div class="nm">'+(myRole==='def'?'分裂格子':'增加兵线')+'</div><div class="cost">💰'+sc+'</div>';
   sp.addEventListener('pointerdown', e=>startDrag(e,'split'));
   box.appendChild(sp);
+  const kc=document.createElement('div');
+  kc.className='card'; kc.id='card_king';
+  if(myRole==='def'){
+    kc.innerHTML='<div class="ico">🏥</div><div class="nm">回血</div><div class="cost">💰'+KING_BUY_COST+'</div>';
+    kc.addEventListener('click', buyKingHeal);
+  } else {
+    kc.innerHTML='<div class="ico">🗡️</div><div class="nm">刺客</div><div class="cost">💰'+ASSASSIN_COST+'</div>';
+    kc.addEventListener('click', buyAssassin);
+  }
+  box.appendChild(kc);
+}
+function buyKingHeal(){
+  if(!game || game.over) return;
+  if(game.gold.def < KING_BUY_COST){ toast('金币不足'); return; }
+  if(game.king.hp >= KING_HP){ toast('国王已满血'); return; }
+  game.gold.def -= KING_BUY_COST;
+  game.king.hp = Math.min(KING_HP, game.king.hp + KING_BUY_HP);
+  toast('国王 +'+KING_BUY_HP+' 血');
+}
+function buyAssassin(){
+  if(!game || game.over) return;
+  if(game.gold.atk < ASSASSIN_COST){ toast('金币不足'); return; }
+  game.gold.atk -= ASSASSIN_COST;
+  game.king.hp = Math.max(0, game.king.hp - ASSASSIN_DMG);
+  game.king.healT = 0;
+  toast('刺客出击，国王 -'+ASSASSIN_DMG+' 血');
+  if(game.king.hp <= 0){ game.king.hp = 0; endGame(myRole==='atk'); }
 }
 
 function startDrag(e, type){
@@ -695,8 +726,15 @@ function update(dt){
   }
   for(const u of g.units){
     if(u.team==='atk' && u.hp>0 && u.y>=KING_Y-30){
-      if(u.atkCd<=0){ g.king.hp-=u.atk; u.atkCd=u.cd; }
+      g.king.hp -= (KING_HIT[u.type] || 10);
+      g.king.healT = 0;
+      u.hp = 0;
     }
+  }
+  g.king.healT += dt;
+  if(g.king.hp < KING_HP && g.king.healT >= KING_HEAL_CD){
+    g.king.hp = Math.min(KING_HP, g.king.hp + KING_HEAL_AMOUNT);
+    g.king.healT -= KING_HEAL_CD;
   }
   if(g.king.hp<=0){ g.king.hp=0; endGame(myRole==='atk'); }
   else if(g.time>=GAME_TIME){ endGame(myRole==='def'); }
@@ -847,6 +885,12 @@ function drawHUD(){
   $('goldTxt').textContent=g.gold[myRole];
   const kp=Math.max(0,g.king.hp/g.king.maxHp*100);
   $('kingBar').style.width=kp+'%';
+  const kht=$('kingHpTxt'); if(kht) kht.textContent=Math.ceil(g.king.hp);
+  const kc=$('card_king');
+  if(kc){
+    if(myRole==='def'){ kc.classList.toggle('off', game.gold.def<KING_BUY_COST || g.king.hp>=KING_HP); }
+    else { kc.classList.toggle('off', game.gold.atk<ASSASSIN_COST); }
+  }
   const rem=Math.max(0,GAME_TIME-g.time);
   const m=Math.floor(rem/60), s=Math.floor(rem%60);
   $('timer').textContent='⏱ '+m+':'+String(s).padStart(2,'0');
