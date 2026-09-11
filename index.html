@@ -135,10 +135,10 @@ const SPLIT_COST = [200, 400];
 const TYPES = {
   soldier: { name:'小兵', ico:'🗡️', hp:30,  atk:8,  cd:700,  range:110, cost:0,   slow:0,   desc:'近战，只打本兵线' },
   archer:  { name:'射手', ico:'🏹', hp:80,  atk:45, cd:1800, range:260, cost:60,  slow:0,   desc:'远程，可跨兵线' },
-  mage:    { name:'法师', ico:'🔮', hp:70,  atk:30, cd:1500, range:200, cost:70,  slow:1.6, desc:'远程+减速，可跨兵线' },
+  mage:    { name:'法师', ico:'🔮', hp:70,  atk:30, cd:1500, range:200, cost:70,  slow:2.5, desc:'远程+减速，可跨兵线' },
   warrior: { name:'战士', ico:'⚔️', hp:260, atk:42, cd:1000, range:55,  cost:80,  slow:0,   desc:'近战肉盾，只打本兵线' },
 };
-const SOLDIER_CD = { def: 3, atk: 2 }; // 进攻方小兵刷新比防守方快1.5倍
+const SOLDIER_CD = { def: 3, atk: 1 }; // 进攻方小兵刷新比防守方快3倍
 
 const EQUIP = {
   archer:  ['重弩','神臂弓','诸葛连弩','霸王弓','龙舌弓'],
@@ -706,9 +706,9 @@ function update(dt){
     if(u.team==='atk'){
       const tgt=findTarget(u);
       if(tgt){
-        if(tgt.dist>u.range){ u.y+=(slowed?30:60)*dt; }
+        if(tgt.dist>u.range){ u.y+=(slowed?20:60)*dt; }
         else if(u.atkCd<=0){ attack(u,tgt.obj); }
-      } else { u.y+=(slowed?30:60)*dt; }
+      } else { u.y+=(slowed?20:60)*dt; }
     } else if(u.team==='def'){
       const tgt=findTarget(u);
       if(tgt && u.atkCd<=0 && tgt.dist<=u.range){ attack(u,tgt.obj); }
@@ -838,6 +838,12 @@ function drawUnits(){
     const y=sY(u.y);
     const cfg = u.type==='creep' ? {ico:'🐗'} : TYPES[u.type];
     const col = u.team==='def' ? '#3fb950' : (u.team==='atk' ? '#f0c060' : '#58a6ff');
+    if(u.range>0){
+      ctx.globalAlpha=0.08;
+      ctx.strokeStyle=col; ctx.lineWidth=1;
+      ctx.beginPath(); ctx.arc(u.x,y,u.range,0,Math.PI*2); ctx.stroke();
+      ctx.globalAlpha=1;
+    }
     const w=32,h=5;
     ctx.fillStyle='#000'; ctx.fillRect(u.x-w/2,y-UNIT_R-9,w,h);
     ctx.fillStyle=u.team==='atk'?'#f85149':'#3fb950';
@@ -873,6 +879,12 @@ function drawGhost(){
     ctx.strokeStyle='#fff'; ctx.strokeRect(x-W/laneCount/2, sY(BASE_Y)-16, W/laneCount, 32);
   }
   const cfg = drag.type==='split' ? {ico: myRole==='def'?'🔲':'➕'} : TYPES[drag.type];
+  if(drag.type!=='split'){
+    ctx.globalAlpha=0.28;
+    ctx.strokeStyle='#58a6ff'; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.arc(pos.lx,pos.ly,TYPES[drag.type].range,0,Math.PI*2); ctx.stroke();
+    ctx.lineWidth=2.5;
+  }
   ctx.globalAlpha=0.6;
   ctx.fillStyle='#58a6ff'; ctx.beginPath(); ctx.arc(pos.lx,pos.ly,UNIT_R,0,Math.PI*2); ctx.fill();
   ctx.fillStyle='#fff'; ctx.font='13px sans-serif'; ctx.textAlign='center';
