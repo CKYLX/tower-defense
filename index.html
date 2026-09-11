@@ -115,6 +115,14 @@
 
 <div id="tip" class="tip hidden"></div>
 
+<div id="match" class="screen hidden">
+  <div class="box" style="background:#161b22;border:1px solid #30363d;border-radius:14px;padding:28px 34px;text-align:center;min-width:260px;">
+    <h2 style="font-size:22px;margin-bottom:10px;">🔍 匹配中…</h2>
+    <div class="msg" id="matchMsg" style="font-size:14px;color:#8b949e;margin-bottom:16px;">正在寻找对手</div>
+    <div class="big-btn" onclick="cancelMatch()">取消匹配</div>
+  </div>
+</div>
+
 <script>
 'use strict';
 /* ================= 常量（竖屏世界坐标） ================= */
@@ -148,6 +156,9 @@ const EQUIP = {
 const TYPE_ICO = { archer:'🏹', mage:'🔮', warrior:'⚔️' };
 const TYPE_NAME = { archer:'射手', mage:'法师', warrior:'战士' };
 const EQUIP_VALUE = [1, 5, 25, 125, 625];  // tier 1~5 分解得钻石
+const MATCH_TIMEOUT = 30;   // 匹配超时（秒），超时转 AI
+const MATCH_POLL = 1000;    // 匹配轮询间隔（ms）
+const PVP_POLL = 900;       // 对局内事件轮询间隔（ms）
 
 /* ================= Supabase 数据层 ================= */
 const SUPABASE_URL = 'https://vsyoivroqesxrhruzusu.supabase.co';
@@ -157,14 +168,14 @@ const API_H = { apikey: SUPABASE_KEY, authorization: 'Bearer ' + SUPABASE_KEY };
 const API_UPSERT = { apikey: SUPABASE_KEY, authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', 'Prefer': 'resolution=merge-duplicates' };
 
 let myId = null, me = null;
-let worldCache = { players: {}, queue: [] };
+let worldCache = { players: {}, queue: [], matches: [] };
 
 async function loadWorld(){
   try {
     const r = await fetch(SUPABASE_URL + '/rest/v1/game_state?id=eq.' + TD_ROW_ID + '&select=world', { headers: API_H });
-    if(r.ok){ const j = await r.json(); return (j[0] && j[0].world) || { players:{}, queue:[] }; }
+    if(r.ok){ const j = await r.json(); return (j[0] && j[0].world) || { players:{}, queue:[], matches:[] }; }
   } catch(e){}
-  return { players:{}, queue:[] };
+  return { players:{}, queue:[], matches:[] };
 }
 let saveLock = Promise.resolve();
 function saveWorld(w){
@@ -231,7 +242,7 @@ function sha256js(data){
   let out=''; for(let i=0;i<8;i++) out+=H[i].toString(16).padStart(8,'0');
   return out;
 }
-function hideScreens(){ ['auth','lobby','space','rel','result'].forEach(id=>$(id).classList.add('hidden')); }
+function hideScreens(){ ['auth','lobby','space','rel','result','match'].forEach(id=>$(id).classList.add('hidden')); }
 
 /* ================= 账号 ================= */
 function showAuth(){
@@ -271,6 +282,10 @@ async function doLogin(){
   } catch(e){ toast('登录出错：' + (e && e.message ? e.message : e)); }
 }
 function logout(){
+  clearMatchTimer();
+  pvp = null;
+  game = null;
+  if(raf) cancelAnimationFrame(raf);
   localStorage.removeItem('td_me');
   myId = null; me = null;
   showAuth();
@@ -415,6 +430,9 @@ async function relAccept(fromId){
 
 /* ================= 游戏状态 ================= */
 let game=null, cv, ctx, raf=null, myRole=null, lastTs=0;
+let pvp = null;          // {matchId, opponentName, opponentId, host}
+let matchTimer = null;   // 匹配/事件轮询定时器
+let mySeq = 0;           // 已处理的事件序号
 let laneCount = LANE_MIN;
 let creepTimer = 0;
 let soldierCd = { def:0, atk:0 };
@@ -433,6 +451,16 @@ function makeUnit(team,type,lane,y){
 }
 
 function startGame(role){
+  clearMatchTimer();
+  myRole = role;
+  showMatchScreen('正在寻找对手…');
+  enterQueue(role);
+}
+
+function beginGame(role, opp, matchId){
+  clearMatchTimer();
+  pvp = opp ? { matchId, opponentName: opp.name, opponentId: opp.id, host: role==='def' } : null;
+  mySeq = 0;
   myRole = role;
   game = {
     uid:1, time:0, over:false,
@@ -451,12 +479,171 @@ function startGame(role){
   hideScreens();
   $('hud').classList.remove('hidden');
   $('recruit').classList.remove('hidden');
-  $('roleTag').textContent = role==='def' ? '🛡️ 防守方 · 撑过5分钟' : '⚔️ 进攻方 · 推倒国王';
+  $('roleTag').textContent = pvp
+    ? (role==='def' ? '🛡️ 防守方 · VS ' : '⚔️ 进攻方 · VS ') + pvp.opponentName
+    : (role==='def' ? '🛡️ 防守方 · 撑过5分钟' : '⚔️ 进攻方 · 推倒国王');
   buildRecruit();
   initCanvas();
   lastTs = performance.now();
   if(raf) cancelAnimationFrame(raf);
   raf = requestAnimationFrame(loop);
+  if(pvp) pollEvents();
+}
+
+/* ================= 真人匹配 ================= */
+function showMatchScreen(msg){
+  hideScreens();
+  $('match').classList.remove('hidden');
+  if(msg) $('matchMsg').textContent = msg;
+}
+function clearMatchTimer(){
+  if(matchTimer){ clearTimeout(matchTimer); matchTimer = null; }
+}
+function cancelMatch(){
+  clearMatchTimer();
+  (async ()=>{
+    const w = await loadWorld();
+    w.queue = (w.queue||[]).filter(q => q.pid !== myId);
+    await saveWorld(w);
+    showLobby();
+  })();
+}
+async function enterQueue(role){
+  const w = await loadWorld();
+  w.queue = w.queue || []; w.matches = w.matches || [];
+  const now = Date.now();
+  w.queue = w.queue.filter(q => now - q.at < MATCH_TIMEOUT*1000);
+  const opp = w.queue.find(q => q.pid !== myId && q.role !== role);
+  if(opp){
+    w.queue = w.queue.filter(q => q.pid !== myId && q.pid !== opp.pid);
+    const defPid = role==='def' ? myId : opp.pid;
+    const atkPid = role==='def' ? opp.pid : myId;
+    const match = { id:'m_'+randHex(10), defPid, atkPid,
+      defName: (w.players[defPid]&&w.players[defPid].name)||'?',
+      atkName: (w.players[atkPid]&&w.players[atkPid].name)||'?',
+      createdAt: now, seq:0, events:[], over:false, lastAt:now };
+    w.matches.push(match);
+    await saveWorld(w);
+    const oppName = role==='def' ? match.atkName : match.defName;
+    const oppId = role==='def' ? atkPid : defPid;
+    beginGame(role, { name: oppName, id: oppId }, match.id);
+    return;
+  }
+  w.queue.push({ pid: myId, role, at: now });
+  if(!(await saveWorld(w))){ toast('网络错误，匹配失败'); showLobby(); return; }
+  pollMatch(role, now);
+}
+function pollMatch(role, startAt){
+  clearMatchTimer();
+  matchTimer = setTimeout(async ()=>{
+    const w = await loadWorld();
+    w.matches = w.matches || [];
+    const m = w.matches.find(x => !x.over && (x.defPid===myId || x.atkPid===myId));
+    if(m){
+      const oppName = role==='def' ? m.atkName : m.defName;
+      const oppId = role==='def' ? m.atkPid : m.defPid;
+      beginGame(role, { name: oppName, id: oppId }, m.id);
+      return;
+    }
+    const opp = (w.queue||[]).find(q => q.pid !== myId && q.role !== role);
+    if(opp){
+      w.queue = (w.queue||[]).filter(q => q.pid !== myId && q.pid !== opp.pid);
+      const defPid = role==='def' ? myId : opp.pid;
+      const atkPid = role==='def' ? opp.pid : myId;
+      const match = { id:'m_'+randHex(10), defPid, atkPid,
+        defName: (w.players[defPid]&&w.players[defPid].name)||'?',
+        atkName: (w.players[atkPid]&&w.players[atkPid].name)||'?',
+        createdAt: Date.now(), seq:0, events:[], over:false, lastAt:Date.now() };
+      w.matches.push(match);
+      await saveWorld(w);
+      const oppName = role==='def' ? match.atkName : match.defName;
+      const oppId = role==='def' ? atkPid : defPid;
+      beginGame(role, { name: oppName, id: oppId }, match.id);
+      return;
+    }
+    if(Date.now() - startAt >= MATCH_TIMEOUT*1000){
+      const w2 = await loadWorld();
+      w2.queue = (w2.queue||[]).filter(q => q.pid !== myId);
+      await saveWorld(w2);
+      beginGame(role, null, null);
+      return;
+    }
+    pollMatch(role, startAt);
+  }, MATCH_POLL);
+}
+
+/* ================= 对局内事件同步 ================= */
+let eventLock = Promise.resolve();
+function sendEvent(ev){
+  if(!pvp) return;
+  const task = eventLock.then(async ()=>{
+    const w = await loadWorld();
+    const m = (w.matches||[]).find(x => x.id === pvp.matchId);
+    if(!m) return;
+    m.seq = (m.seq||0) + 1;
+    ev.seq = m.seq;
+    ev.pid = myId;
+    m.events = m.events || [];
+    m.events.push(ev);
+    m.lastAt = Date.now();
+    await saveWorld(w);
+  });
+  eventLock = task.catch(()=>{});
+  return task;
+}
+function pollEvents(){
+  if(!pvp) return;
+  clearMatchTimer();
+  matchTimer = setTimeout(async ()=>{
+    if(!pvp || !game || game.over){ clearMatchTimer(); return; }
+    const w = await loadWorld();
+    const m = (w.matches||[]).find(x => x.id === pvp.matchId);
+    if(!m){ pollEvents(); return; }
+    const evs = (m.events||[]).filter(e => e.seq > mySeq);
+    for(const ev of evs){
+      mySeq = Math.max(mySeq, ev.seq);
+      if(ev.pid !== myId) applyEvent(ev);
+    }
+    pollEvents();
+  }, PVP_POLL);
+}
+function applyEvent(ev){
+  const g = game;
+  if(ev.kind === 'spawn'){
+    if(ev.team === 'def'){
+      const cell = g.cells.find(x => x.lane===ev.lane && x.idx===ev.idx);
+      if(cell && !cell.unit){
+        const u = makeUnit('def', ev.type, ev.lane, cell.y);
+        u.homeCell = cell; cell.unit = u; g.units.push(u);
+      }
+    } else if(ev.team === 'atk'){
+      g.units.push(makeUnit('atk', ev.type, ev.lane, BASE_Y+20));
+    }
+  } else if(ev.kind === 'split'){
+    if(ev.team === 'def'){
+      const lane = ev.lane;
+      const cnt = {}; g.cells.forEach(c=>{ if(c.lane===lane) cnt.lane=(cnt.lane||0)+1; });
+      const cur = (cnt.lane||0) - CELLS_INIT;
+      const idx = CELLS_INIT + cur;
+      g.cells.push({ lane, idx, x:laneCenterX(lane), y:CELL_BASE-idx*CELL_DY, unit:null });
+    } else {
+      const old = laneCount;
+      laneCount++;
+      g.cells.forEach(c=>c.x=laneCenterX(c.lane));
+      g.units.forEach(u=>u.x=laneCenterX(u.lane));
+      for(let i=0;i<CELLS_INIT;i++) g.cells.push({ lane:old, idx:i, x:laneCenterX(old), y:CELL_BASE-i*CELL_DY, unit:null });
+    }
+  } else if(ev.kind === 'kingheal'){
+    g.king.hp = Math.min(KING_HP, g.king.hp + KING_BUY_HP);
+  } else if(ev.kind === 'assassin'){
+    g.king.hp = Math.max(0, g.king.hp - ASSASSIN_DMG);
+    g.king.healT = 0;
+  } else if(ev.kind === 'creep'){
+    g.units.push({ id:g.uid++, team:'creep', type:'creep', lane:ev.lane, x:laneCenterX(ev.lane), y:ev.y,
+      hp:100, maxHp:100, atk:0, cd:1e9, range:0, slow:0, atkCd:1e9, slowUntil:0, atkSlowUntil:0, homeCell:null });
+  } else if(ev.kind === 'end'){
+    if(!game.over) endGame(ev.winner === myRole, true);
+  }
 }
 
 function initCanvas(){
@@ -512,6 +699,7 @@ function buyKingHeal(){
   game.gold.def -= KING_BUY_COST;
   game.king.hp = Math.min(KING_HP, game.king.hp + KING_BUY_HP);
   toast('国王 +'+KING_BUY_HP+' 血');
+  if(pvp) sendEvent({ kind:'kingheal' });
 }
 function buyAssassin(){
   if(!game || game.over) return;
@@ -520,6 +708,7 @@ function buyAssassin(){
   game.king.hp = Math.max(0, game.king.hp - ASSASSIN_DMG);
   game.king.healT = 0;
   toast('刺客出击，国王 -'+ASSASSIN_DMG+' 血');
+  if(pvp) sendEvent({ kind:'assassin' });
   if(game.king.hp <= 0){ game.king.hp = 0; endGame(myRole==='atk'); }
 }
 
@@ -585,6 +774,7 @@ function placeDef(type, lx, ly){
   else game.gold.def-=cfg.cost;
   const u=makeUnit('def',type,best.lane,best.y);
   u.homeCell=best; best.unit=u; game.units.push(u);
+  if(pvp) sendEvent({ kind:'spawn', team:'def', type, lane:best.lane, idx:best.idx });
 }
 function placeAtk(type, lx, ly){
   let lane=0, bd=1e9;
@@ -594,6 +784,7 @@ function placeAtk(type, lx, ly){
   else game.gold.atk-=cfg.cost;
   const u=makeUnit('atk',type,lane,BASE_Y+20);
   game.units.push(u);
+  if(pvp) sendEvent({ kind:'spawn', team:'atk', type, lane });
 }
 function splittableCount(){
   const cnt={}; game.cells.forEach(c=>cnt[c.lane]=(cnt[c.lane]||0)+1);
@@ -617,6 +808,7 @@ function placeSplit(lx, ly){
     game.units.forEach(u=>u.x=laneCenterX(u.lane));
     for(let i=0;i<CELLS_INIT;i++) game.cells.push({ lane:old, idx:i, x:laneCenterX(old), y:CELL_BASE-i*CELL_DY, unit:null });
     toast('新增第'+(old+1)+'条兵线！');
+    if(pvp) sendEvent({ kind:'split', team:'atk' });
     return;
   }
   let lane=0, bd=1e9;
@@ -630,6 +822,7 @@ function placeSplit(lx, ly){
   const idx=CELLS_INIT+cur;
   game.cells.push({ lane, idx, x:laneCenterX(lane), y:CELL_BASE-idx*CELL_DY, unit:null });
   toast('兵线'+(lane+1)+'新增格子！');
+  if(pvp) sendEvent({ kind:'split', team:'def', lane });
 }
 
 function aiStep(role,dt){
@@ -687,8 +880,10 @@ function aiStep(role,dt){
 
 function spawnCreep(){
   const lane=ri(0,laneCount-1);
-  game.units.push({ id:game.uid++, team:'creep', type:'creep', lane, x:laneCenterX(lane), y:rnd(300,650),
+  const y=rnd(300,650);
+  game.units.push({ id:game.uid++, team:'creep', type:'creep', lane, x:laneCenterX(lane), y,
     hp:100, maxHp:100, atk:0, cd:1e9, range:0, slow:0, atkCd:1e9, slowUntil:0, atkSlowUntil:0, homeCell:null });
+  return { lane, y };
 }
 
 function loop(ts){
@@ -705,8 +900,14 @@ function update(dt){
   soldierCd.def=Math.max(0,soldierCd.def-dt);
   soldierCd.atk=Math.max(0,soldierCd.atk-dt);
   creepTimer-=dt*1000;
-  if(creepTimer<=0){ creepTimer=rnd(6000,9000); spawnCreep(); }
-  if(myRole==='def') aiStep('atk',dt); else aiStep('def',dt);
+  if(creepTimer<=0){
+    creepTimer=rnd(6000,9000);
+    if(!pvp || pvp.host){
+      const c = spawnCreep();
+      if(pvp) sendEvent({ kind:'creep', lane:c.lane, y:c.y });
+    }
+  }
+  if(!pvp){ if(myRole==='def') aiStep('atk',dt); else aiStep('def',dt); }
 
   for(const u of g.units){
     if(u.hp<=0) continue;
@@ -770,9 +971,13 @@ function attack(u,tgt){
   u.atkCd=u.cd;
 }
 
-function endGame(iWin){
+function endGame(iWin, fromRemote){
   if(game.over) return;
   game.over=true;
+  if(pvp && !fromRemote){
+    const winner = iWin ? myRole : (myRole==='def' ? 'atk' : 'def');
+    sendEvent({ kind:'end', winner });
+  }
   if(iWin){
     const type = ['archer','mage','warrior'][ri(0,2)];
     const ename = EQUIP[type][0];
@@ -785,16 +990,23 @@ function endGame(iWin){
   }
   $('result').classList.remove('hidden');
   if(raf) cancelAnimationFrame(raf);
+  clearMatchTimer();
 }
 async function grantEquipment(name, type){
-  const w = await loadWorld();
-  const p = w.players[myId];
-  if(!p) return;
-  p.equipments = p.equipments || [];
-  p.equipments.push({ name, type, tier:1 });
-  await saveWorld(w);
+  const task = eventLock.then(async ()=>{
+    const w = await loadWorld();
+    const p = w.players[myId];
+    if(!p) return;
+    p.equipments = p.equipments || [];
+    p.equipments.push({ name, type, tier:1 });
+    await saveWorld(w);
+  });
+  eventLock = task.catch(()=>{});
+  return task;
 }
 function backToLobby(){
+  clearMatchTimer();
+  pvp = null;
   $('result').classList.add('hidden');
   $('hud').classList.add('hidden');
   $('recruit').classList.add('hidden');
