@@ -36,8 +36,8 @@
   .bar { flex:1; height:9px; background:#21262d; border-radius:5px; overflow:hidden; margin:0 8px; }
   .bar > i { display:block; height:100%; background:#f85149; transition:width .15s; }
 
-  #recruit { flex:0 0 auto; display:flex; gap:7px; padding:8px 8px calc(8px + env(safe-area-inset-bottom)); background:#161b22; border-top:1px solid #30363d; overflow-x:auto; z-index:10; }
-  .card { flex:0 0 62px; height:74px; border-radius:10px; border:1px solid #30363d; background:#21262d; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:grab; position:relative; touch-action:none; }
+  #recruit { flex:0 0 auto; display:flex; gap:7px; padding:8px 8px calc(8px + env(safe-area-inset-bottom)); background:#161b22; border-top:1px solid #30363d; overflow-x:auto; touch-action:pan-x; -webkit-overflow-scrolling:touch; z-index:10; }
+  .card { flex:0 0 62px; height:74px; border-radius:10px; border:1px solid #30363d; background:#21262d; display:flex; flex-direction:column; align-items:center; justify-content:center; cursor:grab; position:relative; touch-action:pan-x; }
   .card:active { cursor:grabbing; }
   .card .ico { font-size:26px; line-height:1; }
   .card .nm { font-size:11px; margin-top:2px; }
@@ -429,7 +429,7 @@ function makeUnit(team,type,lane,y){
   const c=TYPES[type];
   return { id:game.uid++, team, type, lane, x:laneCenterX(lane), y,
     hp:c.hp, maxHp:c.hp, atk:c.atk, cd:c.cd, range:c.range, slow:c.slow,
-    atkCd:0, slowUntil:0, homeCell:null };
+    atkCd:0, slowUntil:0, atkSlowUntil:0, homeCell:null };
 }
 
 function startGame(role){
@@ -539,11 +539,20 @@ function startDrag(e, type){
       if(game.gold.atk < LANE_ADD_COST){ toast('金币不足'); return; }
     }
   }
-  drag = { type, sx:e.clientX, sy:e.clientY };
+  drag = { type, sx:e.clientX, sy:e.clientY, ox:e.clientX, oy:e.clientY, armed:false };
 }
-function moveDrag(e){ if(!drag) return; drag.sx=e.clientX; drag.sy=e.clientY; }
+function moveDrag(e){
+  if(!drag) return;
+  if(!drag.armed){
+    const dx=e.clientX-drag.ox, dy=e.clientY-drag.oy;
+    if(Math.abs(dx)>10 && Math.abs(dx)>Math.abs(dy)){ drag=null; return; }
+    if(Math.abs(dy)>10) drag.armed=true;
+  }
+  drag.sx=e.clientX; drag.sy=e.clientY;
+}
 function endDrag(e){
   if(!drag) return;
+  if(!drag.armed){ drag=null; return; }
   const t=drag.type; drag=null;
   const pos = clientToCanvas(e.clientX, e.clientY);
   if(!pos) return;
@@ -679,7 +688,7 @@ function aiStep(role,dt){
 function spawnCreep(){
   const lane=ri(0,laneCount-1);
   game.units.push({ id:game.uid++, team:'creep', type:'creep', lane, x:laneCenterX(lane), y:rnd(300,650),
-    hp:100, maxHp:100, atk:0, cd:1e9, range:0, slow:0, atkCd:1e9, slowUntil:0, homeCell:null });
+    hp:100, maxHp:100, atk:0, cd:1e9, range:0, slow:0, atkCd:1e9, slowUntil:0, atkSlowUntil:0, homeCell:null });
 }
 
 function loop(ts){
@@ -701,7 +710,8 @@ function update(dt){
 
   for(const u of g.units){
     if(u.hp<=0) continue;
-    u.atkCd=Math.max(0,u.atkCd-dt*1000);
+    const atkSlowed=u.atkSlowUntil>performance.now();
+    u.atkCd=Math.max(0,u.atkCd-dt*(atkSlowed?500:1000));
     const slowed=u.slowUntil>performance.now();
     if(u.team==='atk'){
       const tgt=findTarget(u);
@@ -753,7 +763,10 @@ function findTarget(u){
 }
 function attack(u,tgt){
   tgt.hp-=u.atk;
-  if(u.slow>0) tgt.slowUntil=performance.now()+u.slow*1000;
+  if(u.slow>0){
+    if(u.team==='def') tgt.slowUntil=performance.now()+u.slow*1000;
+    else tgt.atkSlowUntil=performance.now()+u.slow*1000;
+  }
   u.atkCd=u.cd;
 }
 
@@ -851,6 +864,7 @@ function drawUnits(){
     ctx.fillStyle=col; ctx.beginPath(); ctx.arc(u.x,y,UNIT_R,0,Math.PI*2); ctx.fill();
     ctx.strokeStyle='#0d1117'; ctx.lineWidth=2.5; ctx.stroke();
     if(u.slowUntil>performance.now()){ ctx.strokeStyle='rgba(56,139,253,.7)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(u.x,y,UNIT_R+4,0,Math.PI*2); ctx.stroke(); }
+    if(u.atkSlowUntil>performance.now()){ ctx.strokeStyle='rgba(255,159,10,.75)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(u.x,y,UNIT_R+4,0,Math.PI*2); ctx.stroke(); }
     ctx.fillStyle='#fff'; ctx.font='13px sans-serif'; ctx.textAlign='center';
     ctx.fillText(cfg.ico,u.x,y+4);
     ctx.textAlign='left';
